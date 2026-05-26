@@ -48,8 +48,12 @@ def run_onnx_cpu_verification():
     for i in range(CNN_WINDOW_SIZE, total_len):
         x_ir = ir_hp[i - CNN_WINDOW_SIZE : i]
         x_red = red_hp[i - CNN_WINDOW_SIZE : i]
-        x_ir = (x_ir - np.mean(x_ir)) / (np.std(x_ir) + 1e-6)
-        x_red = (x_red - np.mean(x_red)) / (np.std(x_red) + 1e-6)
+        # 联合归一化（与 2.py 训练对齐）
+        combined = np.concatenate([x_ir, x_red])
+        mean = combined.mean()
+        std = combined.std() + 1e-6
+        x_ir = (x_ir - mean) / std
+        x_red = (x_red - mean) / std
         x_input = np.stack([x_ir, x_red], axis=0)
         x_tensor = np.expand_dims(x_input, axis=0).astype(np.float32)
         probs[i] = session.run([output_name], {input_name: x_tensor})[0].item()
