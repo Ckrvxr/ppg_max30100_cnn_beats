@@ -1,0 +1,25 @@
+{
+    "data": {
+        "sources": [
+            "labeled/2026-05-27_02-14-03.csv",
+            "labeled/2026-05-27_04-01-46.csv"
+        ],
+        "dataset": "labeled/merged.csv"
+    },
+    "model": {
+        "onnx": "model/ppg_mcu_model.onnx",
+        "pth": "model/ppg_mcu_model.pth",
+        "h": "model/ppg_cnn_weights.h"
+    },
+    "prelabel": {
+        "threshold": 0.5,
+        "refractory": 20
+    },
+    "train": {
+        "window_size": 100,
+        "batch_size": 32,
+        "epochs": 100,
+        "learning_rate": 0.001,
+        "num_samples_epoch": 8000
+    }
+}

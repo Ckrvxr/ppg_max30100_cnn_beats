@@ -2,36 +2,47 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
+import sys
 from io import StringIO
 
 VIEW_WINDOW = 1000
 
-def run_labeling_tool(input_txt_path, output_csv_path):
-    print(f"📂 正在载入原始数据: {input_txt_path} ...")
-    with open(input_txt_path, 'rb') as f:
-        raw = f.read()
-    idx = raw.find(b'IR,RED')
-    if idx == -1:
-        raise ValueError("❌ 文件格式错误：找不到 'IR,RED' 标记")
-    csv_part = raw[idx:].decode('ascii')
-    df = pd.read_csv(StringIO(csv_part), header=None, names=['tag1', 'tag2', 'IR', 'RED'])
-
-    ir_raw = df['IR'].values.astype(np.float64)
-    red_raw = df['RED'].values.astype(np.float64)
-    total_len = len(df)
-    print(f"📊 载入成功！总计 {total_len} 点 ({total_len/6000:.1f} 分钟)")
-
-    wave_to_show = ir_raw - pd.Series(ir_raw).ewm(alpha=0.04).mean().values
-
-    if os.path.exists(output_csv_path):
-        print("📂 检测到已存在的标注文件，正在恢复进度...")
-        df_exist = pd.read_csv(output_csv_path)
-        if 'beat_event' in df_exist.columns and len(df_exist) == total_len:
-            beat_events = df_exist['beat_event'].values.astype(int)
+def run_labeling_tool(input_path, output_csv_path):
+    if input_path.endswith('.csv'):
+        print(f"📂 正在载入已标记数据: {input_path} ...")
+        df = pd.read_csv(input_path)
+        df.columns = df.columns.str.strip()
+        if 'IR' not in df.columns or 'RED' not in df.columns:
+            raise ValueError("❌ CSV 必须包含 IR, RED 列")
+        ir_raw = df['IR'].values.astype(np.float64)
+        red_raw = df['RED'].values.astype(np.float64)
+        total_len = len(df)
+        beat_events = df['beat_event'].values.astype(int) if 'beat_event' in df.columns else np.zeros(total_len, dtype=int)
+        print(f"📊 载入成功！总计 {total_len} 点, beat=1: {beat_events.sum()}")
+    else:
+        print(f"📂 正在载入原始数据: {input_path} ...")
+        with open(input_path, 'rb') as f:
+            raw = f.read()
+        idx = raw.find(b'IR,RED')
+        if idx == -1:
+            raise ValueError("❌ 文件格式错误：找不到 'IR,RED' 标记")
+        csv_part = raw[idx:].decode('ascii')
+        df = pd.read_csv(StringIO(csv_part), header=None, names=['tag1', 'tag2', 'IR', 'RED'])
+        ir_raw = df['IR'].values.astype(np.float64)
+        red_raw = df['RED'].values.astype(np.float64)
+        total_len = len(df)
+        print(f"📊 载入成功！总计 {total_len} 点 ({total_len/6000:.1f} 分钟)")
+        if os.path.exists(output_csv_path):
+            df_exist = pd.read_csv(output_csv_path)
+            if 'beat_event' in df_exist.columns and len(df_exist) == total_len:
+                beat_events = df_exist['beat_event'].values.astype(int)
+                print(f"📂 恢复已有标注: {beat_events.sum()} 个事件")
+            else:
+                beat_events = np.zeros(total_len, dtype=int)
         else:
             beat_events = np.zeros(total_len, dtype=int)
-    else:
-        beat_events = np.zeros(total_len, dtype=int)
+
+    wave_to_show = ir_raw - pd.Series(ir_raw).ewm(alpha=0.04).mean().values
 
     current_idx = 0
     print("\n=================== 👑 脉搏事件手动标注系统 ===================")
@@ -115,4 +126,10 @@ def run_labeling_tool(input_txt_path, output_csv_path):
     print(f"\n🏆 已标记数据集保存至: {output_csv_path} 🚀")
 
 if __name__ == '__main__':
-    run_labeling_tool('raw/raw_data.txt', 'labeled/labeled_data.csv')
+    if len(sys.argv) >= 3:
+        in_path = sys.argv[1]
+        out_path = sys.argv[2]
+    else:
+        in_path = 'raw/raw_data.txt'
+        out_path = 'labeled/labeled_data.csv'
+    run_labeling_tool(in_path, out_path)

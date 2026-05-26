@@ -1,92 +1,151 @@
+import json, os, sys
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
-import onnxruntime as ort
-import os
-import sys
+import torch
 from io import StringIO
+from scipy.signal import medfilt
 
-CNN_WINDOW_SIZE = 100
-ONNX_MODEL_PATH = 'model/ppg_mcu_model.onnx'
-TEST_DATA_PATH = sys.argv[1] if len(sys.argv) > 1 else 'raw/raw_data.txt'
+with open('ppg_config.json') as f:
+    CFG = json.load(f)
 
-def run_onnx_cpu_verification():
-    print("\n⚡ [ONNX CPU 验证器] 启动...")
+DATA_SOURCES = CFG['data']['sources']
+WINDOW_SIZE  = CFG['train']['window_size']
+PTH_PATH     = CFG['model']['pth']
 
-    if not os.path.exists(ONNX_MODEL_PATH):
-        print(f"❌ 找不到模型: {ONNX_MODEL_PATH}")
+class McuPpgNet(torch.nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.conv1 = torch.nn.Conv1d(2, 8, kernel_size=7, padding=3, groups=2)
+        self.bn1   = torch.nn.BatchNorm1d(8)
+        self.conv2 = torch.nn.Conv1d(8, 16, kernel_size=5, padding=2, groups=4)
+        self.bn2   = torch.nn.BatchNorm1d(16)
+        self.pool1 = torch.nn.AvgPool1d(2)
+        self.pool2 = torch.nn.AvgPool1d(2)
+        self.dw3   = torch.nn.Conv1d(16, 16, kernel_size=3, padding=1, groups=16)
+        self.bn3   = torch.nn.BatchNorm1d(16)
+        self.pw3   = torch.nn.Conv1d(16, 8, kernel_size=1)
+        self.bn_pw3= torch.nn.BatchNorm1d(8)
+        self.pool3 = torch.nn.AvgPool1d(5)
+        self.dw4   = torch.nn.Conv1d(8, 8, kernel_size=3, padding=1, groups=8)
+        self.bn4   = torch.nn.BatchNorm1d(8)
+        self.pw4   = torch.nn.Conv1d(8, 4, kernel_size=1)
+        self.bn_pw4= torch.nn.BatchNorm1d(4)
+        self.fc1   = torch.nn.Linear(4 * 5, 8)
+        self.fc2   = torch.nn.Linear(8, 1)
+        self.sigmoid = torch.nn.Sigmoid()
+    def forward(self, x):
+        x = self.pool1(torch.relu(self.bn1(self.conv1(x))))
+        x = self.pool2(torch.relu(self.bn2(self.conv2(x))))
+        x = torch.relu(self.bn3(self.dw3(x)))
+        x = torch.relu(self.bn_pw3(self.pw3(x)))
+        x = self.pool3(x)
+        x = torch.relu(self.bn4(self.dw4(x)))
+        x = torch.relu(self.bn_pw4(self.pw4(x)))
+        x = x.view(x.size(0), -1)
+        x = torch.relu(self.fc1(x))
+        x = self.fc2(x)
+        return self.sigmoid(x).squeeze(-1)
+
+def run_verification():
+    sources = [s for s in DATA_SOURCES if os.path.exists(s)]
+    if not sources:
+        print("❌ 无可用数据源")
         return
-    print(f"📡 载入模型: {ONNX_MODEL_PATH} ...")
-    session = ort.InferenceSession(ONNX_MODEL_PATH, providers=['CPUExecutionProvider'])
-    input_name = session.get_inputs()[0].name
-    output_name = session.get_outputs()[0].name
 
-    if not os.path.exists(TEST_DATA_PATH):
-        print(f"❌ 找不到数据: {TEST_DATA_PATH}")
+    if not os.path.exists(PTH_PATH):
+        print(f"❌ 找不到模型: {PTH_PATH}")
         return
+    model = McuPpgNet()
+    model.load_state_dict(torch.load(PTH_PATH, weights_only=True))
+    model.eval()
+    print(f"📡 模型已加载: {PTH_PATH}")
 
-    print(f"📂 载入数据: {TEST_DATA_PATH} ...")
-    with open(TEST_DATA_PATH, 'rb') as f:
-        raw = f.read()
-    idx = raw.find(b'IR,RED')
-    if idx == -1:
-        print("❌ 找不到 'IR,RED' 标记")
-        return
-    csv_part = raw[idx:].decode('ascii')
-    df = pd.read_csv(StringIO(csv_part), header=None, names=['tag1', 'tag2', 'IR', 'RED'])
+    for src in sources:
+        print(f"\n📂 {src}")
+        if src.endswith('.csv'):
+            df = pd.read_csv(src)
+            df.columns = df.columns.str.strip()
+        else:
+            with open(src, 'rb') as f:
+                raw = f.read()
+            idx = raw.find(b'IR,RED')
+            if idx == -1:
+                print("  ❌ 无 IR,RED 标记, 跳过")
+                continue
+            df = pd.read_csv(StringIO(raw[idx:].decode('ascii')), header=None, names=['a','b','IR','RED'])
+        ir = df['IR'].values.astype(np.float64)
+        red = df['RED'].values.astype(np.float64)
+        n = len(df)
 
-    ir_raw = df['IR'].values.astype(np.float64)
-    red_raw = df['RED'].values.astype(np.float64)
-    total_len = len(df)
-    print(f"📊 {total_len} 点 ({total_len/6000:.1f} 分钟)")
+        ir_hp = ir - pd.Series(ir).ewm(alpha=0.04).mean().values
+        red_hp = red - pd.Series(red).ewm(alpha=0.04).mean().values
 
-    ir_hp = ir_raw - pd.Series(ir_raw).ewm(alpha=0.04).mean().values
-    red_hp = red_raw - pd.Series(red_raw).ewm(alpha=0.04).mean().values
+        print(f"  🏎️  PyTorch 推理 {n} 点...")
+        probs = np.zeros(n)
+        batch_size = 1024
+        with torch.no_grad():
+            for st in range(WINDOW_SIZE, n, batch_size):
+                en = min(st + batch_size, n)
+                batch = []
+                for i in range(st, en):
+                    xi = ir_hp[i-WINDOW_SIZE:i]
+                    xr = red_hp[i-WINDOW_SIZE:i]
+                    c = np.concatenate([xi, xr])
+                    m, s = c.mean(), c.std() + 1e-6
+                    xi = (xi - m) / s
+                    xr = (xr - m) / s
+                    batch.append(np.stack([xi, xr], axis=0))
+                batch_t = torch.from_numpy(np.array(batch, dtype=np.float32))
+                probs[st:en] = model(batch_t).numpy()
 
-    print("🏎️  滚动滑窗推理...")
-    probs = np.zeros(total_len)
-    for i in range(CNN_WINDOW_SIZE, total_len):
-        x_ir = ir_hp[i - CNN_WINDOW_SIZE : i]
-        x_red = red_hp[i - CNN_WINDOW_SIZE : i]
-        # 联合归一化（与 2.py 训练对齐）
-        combined = np.concatenate([x_ir, x_red])
-        mean = combined.mean()
-        std = combined.std() + 1e-6
-        x_ir = (x_ir - mean) / std
-        x_red = (x_red - mean) / std
-        x_input = np.stack([x_ir, x_red], axis=0)
-        x_tensor = np.expand_dims(x_input, axis=0).astype(np.float32)
-        probs[i] = session.run([output_name], {input_name: x_tensor})[0].item()
+        kernel = np.ones(5) / 5
+        probs_ma  = np.convolve(probs, kernel, mode='same')
+        probs_ewm = pd.Series(probs).ewm(alpha=0.3).mean().values
+        probs_med = medfilt(probs, kernel_size=5)
+        probs_int = np.convolve(probs, np.ones(20) / 20, mode='same')
 
-    print("🏆 推理完成！渲染可视化...\n")
+        CHUNK = 5000
+        cur = 0
+        while cur < n:
+            end = min(cur + CHUNK, n)
+            xrng = range(cur, end)
+            fig, axes = plt.subplots(6, 1, sharex=True, figsize=(15, 10))
+            fig.suptitle(f"{os.path.basename(src)}  [{cur}~{end} / {n}]", fontsize=13, fontweight='bold')
+            aw, a1, a2, a3, a4, a5 = axes
 
-    CHUNK = 5000
-    n_chunks = int(np.ceil(total_len / CHUNK))
+            aw.plot(xrng, ir_hp[cur:end], color='#2ec4b6', linewidth=1.2)
+            aw.set_ylim(-2000, 2000); aw.set_ylabel('IR EWM'); aw.grid(True, ls='--', alpha=0.5)
 
-    for chunk in range(n_chunks):
-        start = chunk * CHUNK
-        end = min(start + CHUNK, total_len)
+            for ax, y, c, lbl in [(a1, probs, '#ff1654', 'RAW'), (a2, probs_ma, '#2196F3', 'BOX'),
+                                   (a3, probs_ewm, '#4CAF50', 'EWM'), (a4, probs_med, '#FF9800', 'MED'),
+                                   (a5, probs_int, '#9C27B0', 'INT')]:
+                ax.plot(xrng, y[cur:end], color=c, linewidth=1.2)
+                ax.set_ylim(-0.05, 1.05); ax.set_ylabel(lbl, fontweight='bold', color=c)
+                ax.grid(True, ls='--', alpha=0.5)
 
-        fig, (ax1, ax2) = plt.subplots(2, 1, sharex=True, figsize=(15, 5))
-        fig.suptitle(f"Verification Chunk {chunk+1}/{n_chunks}  [{start} ~ {end}]", fontsize=13, fontweight='bold')
+            a5.set_xlabel('Samples Index')
+            a5.axhline(y=0.5, color='gray', ls=':', label='Trigger 0.5')
+            a5.legend(loc='upper left')
 
-        ax1.plot(range(start, end), ir_hp[start:end], color='#2ec4b6', linewidth=1.2)
-        ax1.set_ylim(-2000, 2000)
-        ax1.set_ylabel('IR EWM', fontweight='bold')
-        ax1.grid(True, linestyle='--', alpha=0.5)
+            def mk_cb():
+                nonlocal cur
+                def cb(ev):
+                    nonlocal cur
+                    if ev.key == 'right':
+                        cur += CHUNK; plt.close(fig)
+                    elif ev.key == 'left' and cur >= CHUNK:
+                        cur -= CHUNK; plt.close(fig)
+                    elif ev.key == 'escape':
+                        cur = n; plt.close(fig)
+                return cb
 
-        ax2.plot(range(start, end), probs[start:end], color='#ff1654', linewidth=1.5)
-        ax2.axhline(y=0.82, color='gray', linestyle=':', label='Threshold (0.82)')
-        ax2.set_ylabel('Confidence', fontweight='bold')
-        ax2.set_xlabel('Samples Index', fontweight='bold')
-        ax2.set_ylim(-0.05, 1.05)
-        ax2.grid(True, linestyle='--', alpha=0.5)
-        ax2.legend(loc='upper left')
+            fig.canvas.mpl_connect('key_press_event', mk_cb())
+            plt.tight_layout()
+            plt.show()
 
-        plt.tight_layout()
-        plt.show()
-
-    print("✅ 验证完成")
+    print("\n✅ 验证完成")
 
 if __name__ == '__main__':
-    run_onnx_cpu_verification()
+    print("⚡ 验证启动")
+    run_verification()

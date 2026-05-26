@@ -6,6 +6,7 @@ platforms = ["win-64"]
 version = "0.1.0"
 
 [tasks]
+verify = { cmd = "python 3.py", env = { KMP_DUPLICATE_LIB_OK = "TRUE" } }
 
 [dependencies]
 numpy = ">=2.4.6,<3"
