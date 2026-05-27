@@ -1,12 +1,15 @@
 [workspace]
 authors = ["Ckrvxr <85326108+Ckrvxr@users.noreply.github.com>"]
 channels = ["conda-forge"]
-name = "cnn"
+name = "ppg_max30100_cnn_beats"
 platforms = ["win-64"]
 version = "0.1.0"
 
 [tasks]
-verify = { cmd = "python 3.py", env = { KMP_DUPLICATE_LIB_OK = "TRUE" } }
+train    = { cmd = "python code/train.py", env = { KMP_DUPLICATE_LIB_OK = "TRUE" } }
+verify   = { cmd = "python code/verify.py", env = { KMP_DUPLICATE_LIB_OK = "TRUE" } }
+prelabel = { cmd = "python code/prelabel.py" }
+label    = { cmd = "python code/label_tool.py" }
 
 [dependencies]
 numpy = ">=2.4.6,<3"
@@ -17,6 +20,4 @@ onnxruntime = ">=1.26.0,<2"
 
 [pypi-dependencies]
 torch = ">=2.12.0, <3"
-onnx-ir = ">=0.2.0"
-onnxscript = "*"
 scikit-learn = ">=1.8.0, <2"

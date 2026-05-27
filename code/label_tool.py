@@ -1,13 +1,12 @@
+import argparse
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 import os
-import sys
 from io import StringIO
 
-VIEW_WINDOW = 1000
 
-def run_labeling_tool(input_path, output_csv_path):
+def run_labeling_tool(input_path, output_csv_path, view_window=1000):
     if input_path.endswith('.csv'):
         print(f"📂 正在载入已标记数据: {input_path} ...")
         df = pd.read_csv(input_path)
@@ -54,7 +53,7 @@ def run_labeling_tool(input_path, output_csv_path):
     print("=============================================================\n")
 
     while current_idx < total_len:
-        end_idx = min(current_idx + VIEW_WINDOW, total_len)
+        end_idx = min(current_idx + view_window, total_len)
         idx_range = np.arange(current_idx, end_idx)
         wave_slice = wave_to_show[current_idx:end_idx]
 
@@ -100,13 +99,13 @@ def run_labeling_tool(input_path, output_csv_path):
         def onkey(event):
             nonlocal current_idx
             if event.key == 'right':
-                current_idx += VIEW_WINDOW
+                current_idx += view_window
                 plt.close(fig)
                 out = pd.DataFrame({'IR': ir_raw, 'RED': red_raw, 'beat_event': beat_events})
                 out.to_csv(output_csv_path, index=False)
             elif event.key == 'left':
-                if current_idx >= VIEW_WINDOW:
-                    current_idx -= VIEW_WINDOW
+                if current_idx >= view_window:
+                    current_idx -= view_window
                     plt.close(fig)
             elif event.key == 'escape':
                 current_idx = total_len + 1
@@ -125,11 +124,14 @@ def run_labeling_tool(input_path, output_csv_path):
     out.to_csv(output_csv_path, index=False)
     print(f"\n🏆 已标记数据集保存至: {output_csv_path} 🚀")
 
+
 if __name__ == '__main__':
-    if len(sys.argv) >= 3:
-        in_path = sys.argv[1]
-        out_path = sys.argv[2]
-    else:
-        in_path = 'raw/raw_data.txt'
-        out_path = 'labeled/labeled_data.csv'
-    run_labeling_tool(in_path, out_path)
+    parser = argparse.ArgumentParser(description='PPG 脉搏事件手动标注工具')
+    parser.add_argument('input', nargs='?', default='raw/raw_data.txt',
+                        help='输入数据文件路径（.txt 或 .csv，默认 raw/raw_data.txt）')
+    parser.add_argument('--output', '-o', default='labeled/labeled_data.csv',
+                        help='输出标注 CSV 路径（默认 labeled/labeled_data.csv）')
+    parser.add_argument('--view-window', type=int, default=1000,
+                        help='每页显示采样点数（默认 1000）')
+    args = parser.parse_args()
+    run_labeling_tool(args.input, args.output, args.view_window)

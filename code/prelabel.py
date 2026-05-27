@@ -1,24 +1,18 @@
-import json, os, sys
+import argparse
+import json, os
 import numpy as np
 import pandas as pd
 import onnxruntime as ort
 from io import StringIO
 
-with open('ppg_config.json') as f:
-    CFG = json.load(f)
 
-ONNX_PATH   = CFG['model']['onnx']
-WINDOW_SIZE = CFG['train']['window_size']
-THR         = CFG['prelabel']['threshold']
-REFRACTORY  = CFG['prelabel']['refractory']
-
-def prelabel(input_path, output_csv):
+def run_prelabel(input_path, output_csv, onnx_path, window_size, threshold, refractory):
     print(f"📂 载入: {input_path}")
     if not os.path.exists(input_path):
         print(f"❌ 文件不存在")
         return
-    if not os.path.exists(ONNX_PATH):
-        print(f"❌ 模型不存在: {ONNX_PATH}")
+    if not os.path.exists(onnx_path):
+        print(f"❌ 模型不存在: {onnx_path}")
         return
 
     if input_path.endswith('.csv'):
@@ -44,36 +38,35 @@ def prelabel(input_path, output_csv):
     ir_hp = ir - pd.Series(ir).ewm(alpha=0.04).mean().values
     red_hp = red - pd.Series(red).ewm(alpha=0.04).mean().values
 
-    sess = ort.InferenceSession(ONNX_PATH, providers=['CPUExecutionProvider'])
+    sess = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
     iname = sess.get_inputs()[0].name
     oname = sess.get_outputs()[0].name
 
     print("🏎️  ONNX 推理...")
     probs = np.zeros(n)
-    for i in range(WINDOW_SIZE, n):
-        xi = ir_hp[i-WINDOW_SIZE:i]
-        xr = red_hp[i-WINDOW_SIZE:i]
+    for i in range(window_size, n):
+        xi = ir_hp[i-window_size:i]
+        xr = red_hp[i-window_size:i]
         c = np.concatenate([xi, xr])
         m, s = c.mean(), c.std() + 1e-6
         xi = (xi - m) / s
         xr = (xr - m) / s
-        x_t = np.stack([xi, xr], axis=0).reshape(1, 2, WINDOW_SIZE).astype(np.float32)
+        x_t = np.stack([xi, xr], axis=0).reshape(1, 2, window_size).astype(np.float32)
         probs[i] = sess.run([oname], {iname: x_t})[0].item()
 
     integral = np.convolve(probs, np.ones(20) / 20, mode='same')
     beat = np.zeros(n, dtype=int)
     above = False
-    last = -REFRACTORY
+    last = -refractory
     for i in range(n):
-        if integral[i] >= THR:
-            if not above and i - last >= REFRACTORY:
+        if integral[i] >= threshold:
+            if not above and i - last >= refractory:
                 beat[i] = 1
                 last = i
             above = True
         else:
             above = False
 
-    # 左移 30 点对齐波峰位置
     shifted = np.zeros(n, dtype=int)
     shifted[:n-30] = beat[30:]
     beat = shifted
@@ -82,13 +75,22 @@ def prelabel(input_path, output_csv):
     pd.DataFrame({'IR': ir, 'RED': red, 'beat_event': beat}).to_csv(output_csv, index=False)
     print(f"💾 {output_csv}")
 
+
 if __name__ == '__main__':
-    if len(sys.argv) < 2:
-        print("用法: pixi run python 4.py <input.txt/csv> [output.csv]")
-        print("  .txt → 解析后预标记")
-        print("  .csv → 读取 IR,RED 重新预标记")
-        sys.exit(1)
-    inp = sys.argv[1]
-    out = sys.argv[2] if len(sys.argv) > 2 else inp
+    parser = argparse.ArgumentParser(description='PPG ONNX 预标记工具')
+    parser.add_argument('input', help='输入数据文件（.txt 或 .csv）')
+    parser.add_argument('--output', '-o', help='输出 CSV 路径（默认覆盖输入文件）')
+    parser.add_argument('--config', '-c', default='ppg_config.json',
+                        help='配置文件路径（默认 ppg_config.json）')
+    parser.add_argument('--threshold', type=float, help='覆盖检测阈值')
+    args = parser.parse_args()
+
+    with open(args.config) as f:
+        CFG = json.load(f)
+
+    output_csv = args.output if args.output else args.input
+    threshold = args.threshold if args.threshold is not None else CFG['prelabel']['threshold']
+
     print("⚡ 预标记工具")
-    prelabel(inp, out)
+    run_prelabel(args.input, output_csv, CFG['model']['onnx'],
+                 CFG['train']['window_size'], threshold, CFG['prelabel']['refractory'])

@@ -1,4 +1,5 @@
-import json, os, sys
+import argparse
+import json, os
 import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
@@ -6,12 +7,6 @@ import torch
 from io import StringIO
 from scipy.signal import medfilt
 
-with open('ppg_config.json') as f:
-    CFG = json.load(f)
-
-DATA_SOURCES = CFG['data']['sources']
-WINDOW_SIZE  = CFG['train']['window_size']
-PTH_PATH     = CFG['model']['pth']
 
 class McuPpgNet(torch.nn.Module):
     def __init__(self):
@@ -34,6 +29,7 @@ class McuPpgNet(torch.nn.Module):
         self.fc1   = torch.nn.Linear(4 * 5, 8)
         self.fc2   = torch.nn.Linear(8, 1)
         self.sigmoid = torch.nn.Sigmoid()
+
     def forward(self, x):
         x = self.pool1(torch.relu(self.bn1(self.conv1(x))))
         x = self.pool2(torch.relu(self.bn2(self.conv2(x))))
@@ -47,19 +43,20 @@ class McuPpgNet(torch.nn.Module):
         x = self.fc2(x)
         return self.sigmoid(x).squeeze(-1)
 
-def run_verification():
-    sources = [s for s in DATA_SOURCES if os.path.exists(s)]
+
+def run_verification(sources, window_size, pth_path, trigger_thr):
+    sources = [s for s in sources if os.path.exists(s)]
     if not sources:
         print("❌ 无可用数据源")
         return
 
-    if not os.path.exists(PTH_PATH):
-        print(f"❌ 找不到模型: {PTH_PATH}")
+    if not os.path.exists(pth_path):
+        print(f"❌ 找不到模型: {pth_path}")
         return
     model = McuPpgNet()
-    model.load_state_dict(torch.load(PTH_PATH, weights_only=True))
+    model.load_state_dict(torch.load(pth_path, weights_only=True))
     model.eval()
-    print(f"📡 模型已加载: {PTH_PATH}")
+    print(f"📡 模型已加载: {pth_path}")
 
     for src in sources:
         print(f"\n📂 {src}")
@@ -85,12 +82,12 @@ def run_verification():
         probs = np.zeros(n)
         batch_size = 1024
         with torch.no_grad():
-            for st in range(WINDOW_SIZE, n, batch_size):
+            for st in range(window_size, n, batch_size):
                 en = min(st + batch_size, n)
                 batch = []
                 for i in range(st, en):
-                    xi = ir_hp[i-WINDOW_SIZE:i]
-                    xr = red_hp[i-WINDOW_SIZE:i]
+                    xi = ir_hp[i-window_size:i]
+                    xr = red_hp[i-window_size:i]
                     c = np.concatenate([xi, xr])
                     m, s = c.mean(), c.std() + 1e-6
                     xi = (xi - m) / s
@@ -125,7 +122,7 @@ def run_verification():
                 ax.grid(True, ls='--', alpha=0.5)
 
             a5.set_xlabel('Samples Index')
-            a5.axhline(y=0.5, color='gray', ls=':', label='Trigger 0.5')
+            a5.axhline(y=trigger_thr, color='gray', ls=':', label=f'Trigger {trigger_thr}')
             a5.legend(loc='upper left')
 
             def mk_cb():
@@ -146,6 +143,21 @@ def run_verification():
 
     print("\n✅ 验证完成")
 
+
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='PPG 模型验证与可视化')
+    parser.add_argument('--config', '-c', default='ppg_config.json',
+                        help='配置文件路径（默认 ppg_config.json）')
+    parser.add_argument('--source', nargs='+', help='覆盖数据源列表')
+    args = parser.parse_args()
+
+    with open(args.config) as f:
+        CFG = json.load(f)
+
+    sources = args.source if args.source else CFG['data']['sources']
+    window_size = CFG['train']['window_size']
+    pth_path = CFG['model']['pth']
+    trigger_thr = CFG.get('prelabel', {}).get('threshold', 0.5)
+
     print("⚡ 验证启动")
-    run_verification()
+    run_verification(sources, window_size, pth_path, trigger_thr)
