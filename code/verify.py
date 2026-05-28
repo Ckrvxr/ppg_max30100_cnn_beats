@@ -44,20 +44,6 @@ class McuPpgNet(torch.nn.Module):
         return self.sigmoid(x).squeeze(-1)
 
 
-def kalman_filter(signal, Q=0.01, R=0.1):
-    n = len(signal)
-    x = np.zeros(n)
-    P = np.zeros(n)
-    x[0] = signal[0]
-    P[0] = 1.0
-    for i in range(1, n):
-        x_pred = x[i-1]
-        P_pred = P[i-1] + Q
-        K = P_pred / (P_pred + R)
-        x[i] = x_pred + K * (signal[i] - x_pred)
-        P[i] = (1 - K) * P_pred
-    return x
-
 def run_verification(sources, window_size, pth_path, trigger_thr, refractory=20, fs=100):
     sources = [s for s in sources if os.path.exists(s)]
     if not sources:

@@ -15,11 +15,6 @@
         "threshold": 0.5,
         "refractory": 20
     },
-    "kalman": {
-        "Q": 0.0001,
-        "R": 2.0,
-        "memory_sec":10
-    },
     "sampling_rate": 100,
     "train": {
         "window_size": 100,
