@@ -6,7 +6,22 @@ import onnxruntime as ort
 from io import StringIO
 
 
-def run_prelabel(input_path, output_csv, onnx_path, window_size, threshold, refractory):
+def kalman_filter(probs, Q=0.01, R=0.1):
+    n = len(probs)
+    x = np.zeros(n)
+    P = np.zeros(n)
+    x[0] = probs[0]
+    P[0] = 1.0
+    for i in range(1, n):
+        x_pred = x[i-1]
+        P_pred = P[i-1] + Q
+        K = P_pred / (P_pred + R)
+        x[i] = x_pred + K * (probs[i] - x_pred)
+        P[i] = (1 - K) * P_pred
+    return x
+
+
+def run_prelabel(input_path, output_csv, onnx_path, window_size, threshold, refractory, kalman_Q=0.01, kalman_R=0.1):
     print(f"📂 载入: {input_path}")
     if not os.path.exists(input_path):
         print(f"❌ 文件不存在")
