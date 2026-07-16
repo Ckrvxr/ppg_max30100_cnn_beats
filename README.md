@@ -21,10 +21,10 @@
 ## 用起来
 
 ```
-pixi run train
-pixi run verify
-pixi run prelabel raw/data.txt
-pixi run label
+uv run code/train.py
+uv run code/verify.py
+uv run code/prelabel.py raw/data.txt
+uv run code/label_tool.py
 ```
 
 更详细的用法见 `docs/usage.md`。

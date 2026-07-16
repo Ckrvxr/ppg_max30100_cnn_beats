@@ -9,7 +9,6 @@ from torch.utils.data import Dataset, DataLoader, Subset, WeightedRandomSampler
 from sklearn.model_selection import StratifiedShuffleSplit
 from sklearn.metrics import precision_recall_curve, auc
 from io import StringIO
-import onnxruntime as ort
 from scipy.signal import medfilt
 
 
@@ -49,7 +48,7 @@ class McuPpgNet(nn.Module):
         return self.sigmoid(x).squeeze(-1)
 
 
-def prelabel_txt(txt_path, out_csv, onnx_path, window_size, threshold, refractory):
+def prelabel_txt(txt_path, out_csv, model_path, window_size, threshold, refractory):
     with open(txt_path, 'rb') as f:
         raw = f.read()
     idx = raw.find(b'IR,RED')
@@ -62,9 +61,9 @@ def prelabel_txt(txt_path, out_csv, onnx_path, window_size, threshold, refractor
     ir_hp = ir_raw - pd.Series(ir_raw).ewm(alpha=0.04).mean().values
     red_hp = red_raw - pd.Series(red_raw).ewm(alpha=0.04).mean().values
     total = len(df)
-    sess = ort.InferenceSession(onnx_path, providers=['CPUExecutionProvider'])
-    iname = sess.get_inputs()[0].name
-    oname = sess.get_outputs()[0].name
+    model = McuPpgNet()
+    model.load_state_dict(torch.load(model_path, map_location='cpu'))
+    model.eval()
     probs = np.zeros(total)
     for i in range(window_size, total):
         xi = ir_hp[i-window_size:i]
@@ -73,15 +72,21 @@ def prelabel_txt(txt_path, out_csv, onnx_path, window_size, threshold, refractor
         m, s = c.mean(), c.std() + 1e-6
         xi = (xi - m) / s
         xr = (xr - m) / s
-        x = np.stack([xi, xr], axis=0).reshape(1, 2, window_size).astype(np.float32)
-        probs[i] = sess.run([oname], {iname: x})[0].item()
-    smoothed = medfilt(probs, kernel_size=5)
+        x_t = torch.tensor(np.stack([xi, xr], axis=0), dtype=torch.float32).unsqueeze(0)
+        with torch.no_grad():
+            probs[i] = model(x_t).item()
+    smoothed = medfilt(probs, kernel_size=9)
     beat = np.zeros(total, dtype=int)
+    above = False
     last = -refractory
     for i in range(total):
-        if smoothed[i] >= threshold and i - last >= refractory:
-            beat[i] = 1
-            last = i
+        if smoothed[i] >= threshold:
+            if not above and i - last >= refractory:
+                beat[i] = 1
+                last = i
+            above = True
+        else:
+            above = False
     shifted = np.zeros(total, dtype=int)
     shifted[:total-30] = beat[30:]
     beat = shifted
@@ -105,7 +110,7 @@ def merge_dataset(cfg):
             label_path = os.path.join('labeled', base + '_labeled.csv')
             if not os.path.exists(label_path):
                 print(f"  🏎️  预标记: {src}")
-                if not prelabel_txt(src, label_path, cfg['model']['onnx'],
+                if not prelabel_txt(src, label_path, cfg['model']['pth'],
                                     cfg['train']['window_size'], cfg['prelabel']['threshold'],
                                     cfg['prelabel']['refractory']):
                     print(f"  ❌ 预标记失败: {src}")
@@ -242,7 +247,12 @@ def run_training(cfg):
     print("══════════════════════════════════════════════\n")
 
     torch.save(model.state_dict(), cfg['model']['pth'])
-    print(f"✅ [1/2] {cfg['model']['pth']}")
+    print(f"✅ [1/3] {cfg['model']['pth']}")
+
+    dummy = torch.randn(1, 2, cfg['train']['window_size'])
+    torch.onnx.export(model, dummy, cfg['model']['onnx'],
+                      input_names=['input'], output_names=['output'])
+    print(f"✅ [2/3] {cfg['model']['onnx']}")
 
     me = model.eval()
     w1, b1 = fuse_conv_bn(me.conv1, me.bn1)
@@ -276,7 +286,7 @@ def run_training(cfg):
         f.write(f"const float fc1_bias[{f1b.shape[0]}] = {{{', '.join(f'{x:.6f}f' for x in f1b)}}};\n\n")
         f.write(f"const float fc2_weight[{f2w.shape[1]}] = {{{', '.join(f'{x:.6f}f' for x in f2w[0])}}};\n")
         f.write(f"const float fc2_bias = {f2b[0]:.6f}f;\n\n#endif\n")
-    print(f"✅ [2/2] {cfg['model']['h']}")
+    print(f"✅ [3/3] {cfg['model']['h']}")
     print("\n🎉 全部完成！")
 
 

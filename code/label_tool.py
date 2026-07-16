@@ -4,20 +4,40 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import os
 from io import StringIO
+from scipy.signal import butter, sosfiltfilt
 
 
 def run_labeling_tool(input_path, output_csv_path, view_window=1000):
     if input_path.endswith('.csv'):
-        print(f"📂 正在载入已标记数据: {input_path} ...")
-        df = pd.read_csv(input_path)
-        df.columns = df.columns.str.strip()
-        if 'IR' not in df.columns or 'RED' not in df.columns:
-            raise ValueError("❌ CSV 必须包含 IR, RED 列")
-        ir_raw = df['IR'].values.astype(np.float64)
-        red_raw = df['RED'].values.astype(np.float64)
-        total_len = len(df)
-        beat_events = df['beat_event'].values.astype(int) if 'beat_event' in df.columns else np.zeros(total_len, dtype=int)
-        print(f"📊 载入成功！总计 {total_len} 点, beat=1: {beat_events.sum()}")
+        with open(input_path) as f:
+            cols = f.readline().strip().split(',')
+        if len(cols) == 4 and cols[0] == 'IR' and cols[1] == 'RED':
+            print(f"📂 正在载入原始数据: {input_path} ...")
+            df = pd.read_csv(input_path, header=None, names=['tag1', 'tag2', 'IR', 'RED'])
+            ir_raw = df['IR'].values.astype(np.float64)
+            red_raw = df['RED'].values.astype(np.float64)
+            total_len = len(df)
+            print(f"📊 载入成功！总计 {total_len} 点 ({total_len/6000:.1f} 分钟)")
+            if os.path.exists(output_csv_path):
+                df_exist = pd.read_csv(output_csv_path)
+                if 'beat_event' in df_exist.columns and len(df_exist) == total_len:
+                    beat_events = df_exist['beat_event'].values.astype(int)
+                    print(f"📂 恢复已有标注: {beat_events.sum()} 个事件")
+                else:
+                    beat_events = np.zeros(total_len, dtype=int)
+            else:
+                beat_events = np.zeros(total_len, dtype=int)
+        else:
+            print(f"📂 正在载入已标记数据: {input_path} ...")
+            df = pd.read_csv(input_path)
+            df.columns = df.columns.str.strip()
+            if 'IR' not in df.columns or 'RED' not in df.columns:
+                raise ValueError("❌ CSV 必须包含 IR, RED 列")
+            ir_raw = df['IR'].values.astype(np.float64)
+            red_raw = df['RED'].values.astype(np.float64)
+            total_len = len(df)
+            beat_events = df['beat_event'].values.astype(int) if 'beat_event' in df.columns else np.zeros(total_len, dtype=int)
+            print(f"📊 载入成功！总计 {total_len} 点, beat=1: {beat_events.sum()}")
     else:
         print(f"📂 正在载入原始数据: {input_path} ...")
         with open(input_path, 'rb') as f:
@@ -42,6 +62,8 @@ def run_labeling_tool(input_path, output_csv_path, view_window=1000):
             beat_events = np.zeros(total_len, dtype=int)
 
     wave_to_show = ir_raw - pd.Series(ir_raw).ewm(alpha=0.04).mean().values
+    sos = butter(4, [0.5 / 50, 8 / 50], btype='band', output='sos')
+    wave_to_show = sosfiltfilt(sos, wave_to_show)
 
     current_idx = 0
     print("\n=================== 👑 脉搏事件手动标注系统 ===================")
@@ -60,8 +82,8 @@ def run_labeling_tool(input_path, output_csv_path, view_window=1000):
         fig, ax = plt.subplots(figsize=(15, 6))
         fig.suptitle(f"Labeling [Samples: {current_idx} ~ {end_idx} / Total: {total_len}]", fontsize=12, fontweight='bold')
 
-        ax.plot(idx_range, wave_slice, color='#2ec4b6', linewidth=1.5, label='IR EWM Signal')
-        ax.set_ylim(-2000, 2000)
+        ax.plot(idx_range, wave_slice, color='#2ec4b6', linewidth=1.5, label='IR Bandpass 0.5-8Hz')
+        ax.set_ylim(-100, 100)
         ax.grid(True, linestyle='--', alpha=0.5)
         ax.set_ylabel("Amplitude (IR EWM)", fontweight='bold')
         ax.set_xlabel("Timeline (Samples Index)", fontweight='bold')

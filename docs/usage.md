@@ -1,6 +1,6 @@
 # PPG 脉搏波标注 & 训练工具使用说明
 
-工作目录下所有脚本均位于 `code/` 目录下，通过 `pixi run` 执行。
+所有脚本均位于 `code/` 目录下，通过 `uv run` 执行。
 
 ## 脚本总览
 
@@ -16,7 +16,7 @@
 4 个脚本统一使用 `argparse` 解析参数，均支持 `--help` 查看用法：
 
 ```
-pixi run <task> --help
+uv run <task> --help
 ```
 
 所有共享配置（模型路径、训练超参、阈值等）集中在 `ppg_config.json`。
@@ -28,7 +28,7 @@ pixi run <task> --help
 ### 用法
 
 ```
-pixi run prelabel <input> [选项]
+uv run prelabel <input> [选项]
 ```
 
 ### 参数
@@ -44,13 +44,13 @@ pixi run prelabel <input> [选项]
 
 ```bash
 # 对原始 txt 数据预标记，结果输出到 labeled/
-pixi run prelabel raw/raw_data.txt -o labeled/raw_labeled.csv
+uv run prelabel raw/raw_data.txt -o labeled/raw_labeled.csv
 
 # 对已有 CSV 重新用更高阈值预标记
-pixi run prelabel labeled/old.csv -o labeled/new.csv --threshold 0.7
+uv run prelabel labeled/old.csv -o labeled/new.csv --threshold 0.7
 
 # 使用自定义配置文件
-pixi run prelabel raw/data.txt --config my_config.json
+uv run prelabel raw/data.txt --config my_config.json
 ```
 
 ### 输出
@@ -64,7 +64,7 @@ pixi run prelabel raw/data.txt --config my_config.json
 ### 用法
 
 ```
-pixi run label [input] [选项]
+uv run label [input] [选项]
 ```
 
 ### 参数
@@ -89,13 +89,13 @@ pixi run label [input] [选项]
 
 ```bash
 # 快速启动（使用默认路径）
-pixi run label
+uv run label
 
 # 指定文件和输出
-pixi run label raw/2026-05-27_data.txt -o labeled/my_labeled.csv
+uv run label raw/2026-05-27_data.txt -o labeled/my_labeled.csv
 
 # 每页只看 500 点
-pixi run label raw/data.txt --view-window 500
+uv run label raw/data.txt --view-window 500
 ```
 
 ### 说明
@@ -111,7 +111,7 @@ pixi run label raw/data.txt --view-window 500
 ### 用法
 
 ```
-pixi run train [选项]
+uv run train [选项]
 ```
 
 ### 参数
@@ -127,13 +127,13 @@ pixi run train [选项]
 
 ```bash
 # 使用配置文件默认参数训练
-pixi run train
+uv run train
 
 # 快速迭代（20 轮 + 大学习率）
-pixi run train --epochs 20 --lr 0.005
+uv run train --epochs 20 --lr 0.005
 
 # 使用自定义配置
-pixi run train --config my_config.json
+uv run train --config my_config.json
 ```
 
 ### 流程说明
@@ -161,7 +161,7 @@ pixi run train --config my_config.json
 ### 用法
 
 ```
-pixi run verify [选项]
+uv run verify [选项]
 ```
 
 ### 参数
@@ -175,13 +175,13 @@ pixi run verify [选项]
 
 ```bash
 # 使用配置文件中的数据源
-pixi run verify
+uv run verify
 
 # 指定要验证的文件
-pixi run verify --source labeled/2026-05-27_data.csv
+uv run verify --source labeled/2026-05-27_data.csv
 
 # 同时验证多个文件
-pixi run verify --source raw/test1.txt raw/test2.txt
+uv run verify --source raw/test1.txt raw/test2.txt
 ```
 
 ### 可视化面板

@@ -96,11 +96,7 @@ def run_verification(sources, window_size, pth_path, trigger_thr, refractory=20,
                 batch_t = torch.from_numpy(np.array(batch, dtype=np.float32))
                 probs[st:en] = model(batch_t).numpy()
 
-        kernel = np.ones(5) / 5
-        probs_ma  = np.convolve(probs, kernel, mode='same')
-        probs_ewm = pd.Series(probs).ewm(alpha=0.3).mean().values
-        probs_med = medfilt(probs, kernel_size=13)
-        probs_int = np.convolve(probs, np.ones(10) / 10, mode='same')
+        probs_med = medfilt(probs, kernel_size=9)
 
         beats = np.zeros(n, dtype=int)
         above = False
@@ -119,7 +115,7 @@ def run_verification(sources, window_size, pth_path, trigger_thr, refractory=20,
         if len(beat_idx) > 3:
             window = []
             for i in range(len(beat_idx)):
-                if window and beat_idx[i] - window[-1] > 158:
+                if window and (beat_idx[i] - window[-1] > 158 or beat_idx[i] - window[-1] < 24):
                     window = []
                 window.append(beat_idx[i])
                 if len(window) == 4:
@@ -166,7 +162,7 @@ def run_verification(sources, window_size, pth_path, trigger_thr, refractory=20,
             a2.plot(xrng, probs_med[cur:end], color='#FF9800', linewidth=1.2)
             a2.axhline(y=trigger_thr, color='gray', ls=':', alpha=0.5)
             a2.set_ylim(-0.05, 1.05)
-            a2.set_ylabel('③ Medfilt13', fontweight='bold', color='#FF9800')
+            a2.set_ylabel('③ Medfilt9', fontweight='bold', color='#FF9800')
             a2.grid(True, ls='--', alpha=0.5)
 
             a3.vlines(xrng, ymin=0, ymax=beats[cur:end], color='red', linewidth=1.5, alpha=0.8)
